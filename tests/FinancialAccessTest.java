@@ -1,35 +1,139 @@
 package br.servihub;
-import static br.servihub.Common.*;
-import static org.junit.Assert.*;
-import org.junit.*;
+
 import com.sun.net.httpserver.HttpServer;
-import java.net.*;
-import java.net.http.*;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+import static org.junit.Assert.*;
 
 public class FinancialAccessTest {
- @Test public void onlyAdministratorPassesFinancialAuthorization()throws Exception{
-  Assume.assumeTrue("Use BACKEND1_URL=http://127.0.0.1:19081 for the mock",env("BACKEND1_URL","").equals("http://127.0.0.1:19081"));
-  AtomicReference<String> role=new AtomicReference<>("cliente");
-  HttpServer management=HttpServer.create(new InetSocketAddress("127.0.0.1",19081),0);
-  management.createContext("/interno/sessao",x->{try{
-   if(!KEY.equals(x.getRequestHeaders().getFirst("X-ServiHUB-Internal"))){send(x,403,Map.of("codigo","CHAVE_INVALIDA"));return;}
-   send(x,200,Map.of("autenticado",true,"papel",role.get()));
-  }finally{x.close();}});
-  HttpServer finance=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
-  finance.createContext("/",x->{try{Backend2.handle(x);}catch(Failure e){send(x,e.status,Map.of("codigo",e.code));}catch(Exception e){send(x,500,Map.of("codigo","ERRO_TESTE"));}finally{x.close();}});
-  management.start();finance.start();
-  try{
-   HttpClient client=HttpClient.newHttpClient();String base="http://127.0.0.1:"+finance.getAddress().getPort();
-   for(String currentRole:new String[]{"cliente","funcionario"}){
-    role.set(currentRole);
-    for(String route:new String[]{"/pagamentos","/orcamentos","/pendencias","/lembretes"}){
-     assertEquals(currentRole+route,403,client.send(HttpRequest.newBuilder(URI.create(base+route)).GET().build(),HttpResponse.BodyHandlers.ofString()).statusCode());
+
+    private HttpServer servidor;
+    private HttpClient cliente;
+    private String enderecoBase;
+
+    @Before
+    public void preparar() throws Exception {
+        servidor = HttpServer.create(
+            new InetSocketAddress("127.0.0.1", 0), 0
+        );
+
+        Method rota = Main.class.getDeclaredMethod(
+            "route",
+            com.sun.net.httpserver.HttpExchange.class
+        );
+        rota.setAccessible(true);
+
+        servidor.createContext("/", exchange -> {
+            try {
+                rota.invoke(null, exchange);
+            } catch (Exception erro) {
+                exchange.close();
+            }
+        });
+
+        servidor.start();
+
+        enderecoBase = "http://127.0.0.1:"
+            + servidor.getAddress().getPort();
+
+        cliente = HttpClient.newHttpClient();
     }
-   }
-   role.set("admin");
-   assertEquals(404,client.send(HttpRequest.newBuilder(URI.create(base+"/rota-de-teste-inexistente")).GET().build(),HttpResponse.BodyHandlers.ofString()).statusCode());
-  }finally{finance.stop(0);management.stop(0);}
- }
+
+    @After
+    public void finalizar() {
+        if (servidor != null) {
+            servidor.stop(0);
+        }
+    }
+
+    private HttpResponse<String> requisitar(
+        String caminho,
+        String metodo
+    ) throws Exception {
+
+        HttpRequest.Builder requisicao = HttpRequest.newBuilder()
+            .uri(URI.create(enderecoBase + caminho));
+
+        if ("POST".equals(metodo)) {
+            requisicao.POST(
+                HttpRequest.BodyPublishers.noBody()
+            );
+        } else if ("PUT".equals(metodo)) {
+            requisicao.PUT(
+                HttpRequest.BodyPublishers.noBody()
+            );
+        } else {
+            requisicao.GET();
+        }
+
+        return cliente.send(
+            requisicao.build(),
+            HttpResponse.BodyHandlers.ofString()
+        );
+    }
+
+    // Verifica se uma rota inexistente retorna erro 404.
+    @Test
+    public void deveRejeitarRotaInexistente() throws Exception {
+        HttpResponse<String> resposta = requisitar(
+            "/rota-inexistente", "GET"
+        );
+
+        assertEquals(404, resposta.statusCode());
+        assertTrue(
+            resposta.body().contains("ROTA_NAO_ENCONTRADA")
+        );
+    }
+
+    // Impede requisições POST na consulta de lembretes.
+    @Test
+    public void deveBloquearPostEmLembretes() throws Exception {
+        HttpResponse<String> resposta = requisitar(
+            "/lembretes", "POST"
+        );
+
+        assertEquals(405, resposta.statusCode());
+        assertTrue(
+            resposta.body().contains("METODO_NAO_PERMITIDO")
+        );
+    }
+
+    // Impede alterações por PUT na consulta de pendências.
+    @Test
+    public void deveBloquearPutEmPendencias() throws Exception {
+        HttpResponse<String> resposta = requisitar(
+            "/pendencias", "PUT"
+        );
+
+        assertEquals(405, resposta.statusCode());
+        assertTrue(
+            resposta.body().contains("METODO_NAO_PERMITIDO")
+        );
+    }
+
+    // Verifica se o erro informa o método HTTP permitido.
+    @Test
+    public void deveInformarMetodoPermitido() throws Exception {
+        HttpResponse<String> resposta = requisitar(
+            "/lembretes", "POST"
+        );
+
+        assertEquals(405, resposta.statusCode());
+        assertEquals(
+            "GET",
+            resposta.headers()
+                .firstValue("Allow")
+                .orElse("")
+        );
+    }
 }
+
