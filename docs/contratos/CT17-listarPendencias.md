@@ -1,3 +1,4 @@
+
 # CT17 listarPendencias
 
 | Linha | Valor |
@@ -11,54 +12,74 @@
 
 ## Entrada
 
-Não tem.
+Não possui parâmetros obrigatórios nem corpo de requisição.
 
 ## Saída
 
 Sucesso: HTTP 200.
 
-| Campo | Tipo | Obrigatório | Exemplo |
-| --- | --- | --- | --- |
-| pendencias | lista de objeto Pendencia | sim | ver objeto Pendencia |
+A API retorna diretamente um array JSON contendo os pagamentos pendentes.
 
-### Objeto Pendencia
-
-| Campo | Tipo | Obrigatório | Exemplo |
-| --- | --- | --- | --- |
-| pagamentoId | inteiro | sim | 50 |
-| servicoId | inteiro | sim | 20 |
-| clienteId | inteiro | sim | 1 |
-| nomeCliente | texto | sim | Carlos Mendes |
-| descricao | texto | sim | Limpeza da piscina |
-| valor | decimal | sim | 150.00 |
-| situacao | um de: pendente, pago | sim | pendente |
-| atualizadoEm | data e hora | sim | 2026-10-13T09:05:00-03:00 |
+| Campo | Tipo | Descrição |
+| --- | --- | --- |
+| id | inteiro | Identificador do pagamento |
+| servico_id | inteiro | Identificador do serviço |
+| valor | decimal | Valor registrado |
+| situacao | texto | pendente |
+| data_pagamento | data ou nulo | Data registrada no pagamento |
+| descricao | texto | Descrição do serviço |
+| cliente | texto | Nome do cliente |
 
 ## Cabeçalhos de entrada
 
-| Campo | Tipo | Obrigatório | Exemplo |
-| --- | --- | --- | --- |
-| Cookie servihubSessao | texto | sim | 64 caracteres hexadecimais do token |
+| Campo | Tipo | Obrigatório |
+| --- | --- | --- |
+| Cookie | texto | Sim, para autenticação por sessão |
+
+O navegador utiliza o cookie `servihubSessao`.
 
 ## Regras
 
-Backend 2 chama CT18 e conserva os mesmos campos e tipos, devolvendo como pendencias. Frontend sinaliza cada registro e seu valor com situação pendente. Consulta ao abrir a tela e após salvar um pagamento; não há notificação externa. O Backend 2 encaminha o cookie servihubSessao ao Backend 1. Não possui cópia da sessão e não decide se a conta está autorizada. Respostas 401 ou 403 do Backend 1 são repassadas com o mesmo código e corpo. Outros erros ou corpo incompatível geram 503 GESTAO_INDISPONIVEL. Nenhuma indisponibilidade vira lista vazia e nenhum dado antigo é apresentado como atualizado. Regras de sessão, cabeçalhos, origem, timeout e limites seguem a visão geral. O corpo JSON não contém o token de sessão. Resposta contém Content-Type: application/json e Cache-Control: no-store.
+O endpoint `GET /pendencias` do Backend 2 consulta os pagamentos pendentes por meio do Backend 1.
 
-Padrões de campos, datas, valores, rede e erros seguem docs/fluxos/visao-geral.md no Frontend. Campo recebido fora do contrato é rejeitado com 400 DADOS_INVALIDOS.
+Primeiro, o Backend 2 encaminha o cookie recebido para `GET /sessao` no Backend 1, validando a autenticação.
+
+Se a sessão não estiver autenticada, retorna HTTP 401 com o código `SESSAO_INVALIDA`.
+
+Após a validação, o Backend 2 realiza uma requisição HTTP GET para `/pendencias` no Backend 1, utilizando o cabeçalho `X-ServiHUB-Internal` com a chave interna configurada.
+
+O Backend 1 consulta as tabelas `pagamento`, `servico` e `cliente`, retornando somente os registros cuja situação seja `pendente`.
+
+O Backend 2 repassa ao Frontend o código HTTP e o corpo recebidos dessa consulta.
+
+Quando não existem pagamentos pendentes, retorna um array JSON vazio.
+
+O Backend 2 não armazena uma cópia dos pagamentos nem mantém sessões próprias.
+
+As requisições ao Backend 1 possuem timeout de 10 segundos.
+
+Falhas de comunicação, respostas inválidas na validação da sessão ou exceções de integração resultam em HTTP 502 com o código `INTEGRACAO_INDISPONIVEL`.
+
+A resposta utiliza Content-Type `application/json; charset=utf-8`.
 
 ## Erros
 
 | Quando | O que volta |
 | --- | --- |
-| Backend 1 indisponível, resposta inválida ou timeout de 5 segundos | 503 GESTAO_INDISPONIVEL |
-| Cookie ausente, sessão expirada ou invalidada | 401 SESSAO_INVALIDA |
-| ID, campo obrigatório, tipo ou JSON inválido | 400 DADOS_INVALIDOS |
-| Falha inesperada | 500 ERRO_INTERNO |
+| Sessão não autenticada | HTTP 401 — SESSAO_INVALIDA |
+| Backend 1 indisponível ou falha de integração | HTTP 502 — INTEGRACAO_INDISPONIVEL |
+| Rota inexistente | HTTP 404 — ROTA_NAO_ENCONTRADA |
+| Método diferente de GET | HTTP 405 — METODO_NAO_PERMITIDO |
+| Backend 1 retorna erro na consulta de pendências | Código HTTP e corpo repassados pelo Backend 2 |
 
-### Objeto Erro
+## Objeto de erro
 
-| Campo | Tipo | Obrigatório | Exemplo |
-| --- | --- | --- | --- |
-| codigo | texto | sim | DADOS_INVALIDOS |
-| mensagem | texto | sim | Confira os campos informados. |
+Os erros gerados pelo Backend 2 utilizam um objeto JSON com o campo `erro`.
 
+Exemplo:
+
+```json
+{
+  "erro": "INTEGRACAO_INDISPONIVEL"
+}
+```
